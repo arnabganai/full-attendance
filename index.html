@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+
+  <!-- PWA / full-screen tags so browser chrome disappears on the Home Screen -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Shift Clock" />
+  <meta name="application-name" content="Shift Clock" />
+  <meta name="description" content="One-tap office swipe-in with a live 3h 30m target countdown." />
+  <meta name="theme-color" content="#0B121F" />
+
+  <title>Shift Clock · Swipe-In Target Tracker</title>
+
+  <!-- Minimal inline favicon (no external file needed for a single-file drop) -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%230B121F'/%3E%3Ccircle cx='32' cy='32' r='20' fill='none' stroke='%2322D3EE' stroke-width='5'/%3E%3Cline x1='32' y1='32' x2='32' y2='20' stroke='%23334155' stroke-width='5' stroke-linecap='round'/%3E%3Cline x1='32' y1='32' x2='41' y2='32' stroke='%2322D3EE' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E" />
+
+  <!--
+    PWA manifest + service worker are injected at runtime (inline blob/data URLs)
+    so the whole app stays a single, drop-able file with zero external assets.
+    A manifest is not required for the "remove chrome on Home Screen" behaviour —
+    the meta tags above drive that — but the manifest + offline worker make the
+    "Add to Home Screen" / "Install app" experience more reliable on Android.
+  -->
+
+  <style>
+    :root {
+      /* Deep navy dark mode palette */
+      --bg:        #0B121F;
+      --bg-2:      #0E1626;
+      --surface:   #131E30;
+      --surface-2: #182539;
+      --line:      #26344A;
+      --line-soft: #1C2739;
+
+      --text:      #EAEEF6;
+      --text-2:    #98A6BF;
+      --text-3:    #65748C;
+
+      --accent:    #22D3EE;   /* cyan */
+      --accent-2:  #4EA1F7;   /* blue */
+      --accent-d:  #0E7490;
+
+      --ok:        #34D399;   /* green */
+      --ok-d:      #14532D;
+
+      --warn:      #FBBF24;   /* amber */
+      --warn-d:    #7A5A0C;
+
+      --shadow:    rgba(0, 0, 0, 0.45);
+
+      --radius-lg: 22px;
+      --radius-md: 15px;
+      --radius-sm: 11px;
+
+      --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --mono:  "SF Mono", ui-monospace, "JetBrains Mono", "Roboto Mono", Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: var(--font);
+      background:
+        radial-gradient(1200px 700px at 82% -12%, rgba(34, 211, 238, 0.10), transparent 60%),
+        radial-gradient(1000px 800px at -10% 110%, rgba(78, 161, 247, 0.10), transparent 55%),
+        linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      -webkit-tap-highlight-color: transparent;
+      /* safe-area insets for notched Android phones (Pixel 8) */
+      padding: max(14px, env(safe-area-inset-top))
+               max(14px, env(safe-area-inset-right))
+               max(14px, env(safe-area-inset-bottom))
+               max(14px, env(safe-area-inset-left));
+      overscroll-behavior: none;
+      user-select: none;
+    }
+
+    input, button, select, textarea {
+      font-family: inherit;
+      font-size: inherit;
+      color: inherit;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    button { cursor: pointer; border: none; background: none; }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+
+    /* ---------- Layout shell ---------- */
+    .app {
+      max-width: 460px;
+      margin: 0 auto;
+      min-height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* ---------- Header ---------- */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 2px 4px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand .logo {
+      width: 42px; height: 42px; flex: 0 0 auto;
+      border-radius: 12px;
+      display: grid; place-items: center;
+      background: linear-gradient(150deg, var(--surface-2), var(--surface));
+      border: 1px solid var(--line);
+      box-shadow: 0 6px 18px var(--shadow);
+    }
+    .brand .logo svg { width: 24px; height: 24px; }
+    .brand .name {
+      font-size: 18px; font-weight: 700; letter-spacing: .2px; line-height: 1.1;
+    }
+    .brand .sub {
+      font-size: 12px; color: var(--text-3); letter-spacing: .3px; margin-top: 2px;
+    }
+
+    .clock {
+      text-align: right; line-height: 1.15; flex: 0 0 auto;
+    }
+    .clock .time {
+      font-family: var(--mono); font-size: 20px; font-weight: 600; letter-spacing: 1px;
+    }
+    .clock .date { font-size: 11px; color: var(--text-3); letter-spacing: .4px; }
+
+    /* ---------- Status badge ---------- */
+    .status {
+      align-self: center;
+      display: inline-flex; align-items: center; gap: 9px;
+      padding: 9px 16px;
+      border-radius: 999px;
+      font-size: 13px; font-weight: 600; letter-spacing: .3px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text-2);
+      transition: all .35s ease;
+    }
+    .status .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--text-3);
+      flex: 0 0 auto;
+    }
+    .status.in {
+      color: var(--accent);
+      border-color: rgba(34, 211, 238, .45);
+      background: rgba(34, 211, 238, .08);
+    }
+    .status.in .dot {
+      background: var(--accent);
+      box-shadow: 0 0 0 0 rgba(34, 211, 238, .6);
+      animation: pulse 1.8s infinite;
+    }
+    .status.met {
+      color: var(--ok);
+      border-color: rgba(52, 211, 153, .5);
+      background: linear-gradient(180deg, rgba(52, 211, 153, .16), rgba(52, 211, 153, .07));
+      box-shadow: 0 8px 24px rgba(52, 211, 153, .18);
+    }
+    .status.met .dot {
+      background: var(--ok);
+      box-shadow: 0 0 12px rgba(52, 211, 153, .8);
+      animation: none;
+    }
+    @keyframes pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(34, 211, 238, .55); }
+      70%  { box-shadow: 0 0 0 9px rgba(34, 211, 238, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(34, 211, 238, 0); }
+    }
+
+    /* ---------- Cards ---------- */
+    .card {
+      background: linear-gradient(180deg, var(--surface-2), var(--surface));
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+    }
+    .card .label {
+      font-size: 11px; font-weight: 700; letter-spacing: 1.4px;
+      text-transform: uppercase; color: var(--text-3);
+    }
+
+    /* ---------- Countdown hero ---------- */
+    .hero { text-align: center; padding: 22px 18px 20px; }
+    .hero .label { margin-bottom: 10px; display: block; }
+    .countdown {
+      font-family: var(--mono);
+      font-size: clamp(46px, 15vw, 68px);
+      font-weight: 700;
+      letter-spacing: 2px;
+      line-height: 1;
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      transition: color .4s ease;
+    }
+    .countdown .sep { color: var(--text-3); }
+    .hero.met .countdown { color: var(--ok); }
+    .hero .subline {
+      margin-top: 10px;
+      font-size: 13px; color: var(--text-2); letter-spacing: .3px;
+    }
+    .hero .subline b { color: var(--text); font-weight: 700; }
+
+    /* ---------- Progress bar ---------- */
+    .progress-wrap { margin-top: 18px; }
+    .progress-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 9px;
+    }
+    .progress-head .pct {
+      font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--accent);
+    }
+    .progress-head .pct.met { color: var(--ok); }
+    .progress-head .plabel { font-size: 12px; color: var(--text-3); letter-spacing: .5px; }
+    .bar {
+      height: 14px; border-radius: 999px;
+      background: var(--line-soft);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      position: relative;
+    }
+    .bar .fill {
+      height: 100%; width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent-2), var(--accent));
+      transition: width .5s cubic-bezier(.22, .61, .36, 1);
+      box-shadow: 0 0 14px rgba(34, 211, 238, .5);
+    }
+    .bar .fill.met {
+      background: linear-gradient(90deg, #16a34a, var(--ok));
+      box-shadow: 0 0 18px rgba(52, 211, 153, .55);
+    }
+
+    /* ---------- Time tiles ---------- */
+    .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .tile {
+      background: linear-gradient(180deg, var(--surface-2), var(--surface));
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      padding: 14px;
+      text-align: center;
+    }
+    .tile .t-label {
+      font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px;
+      text-transform: uppercase; color: var(--text-3); margin-bottom: 8px;
+    }
+    .tile .t-value {
+      font-family: var(--mono); font-size: clamp(22px, 7vw, 30px);
+      font-weight: 700; letter-spacing: 1px; line-height: 1.1;
+    }
+    .tile .t-ampm { font-size: .55em; color: var(--text-2); font-weight: 600; margin-left: 3px; }
+    .tile.in .t-value { color: var(--accent); }
+    .tile.out .t-value { color: var(--ok); }
+    .tile.empty .t-value { color: var(--text-3); }
+
+    /* ---------- Action row ---------- */
+    .actions { display: flex; gap: 12px; }
+    .btn {
+      flex: 1;
+      display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+      padding: 17px 16px;
+      border-radius: var(--radius-md);
+      font-size: 15px; font-weight: 700; letter-spacing: .3px;
+      border: 1px solid transparent;
+      transition: transform .08s ease, box-shadow .2s ease, background .25s ease;
+    }
+    .btn:active { transform: translateY(1px) scale(.995); }
+    .btn svg { width: 20px; height: 20px; flex: 0 0 auto; }
+
+    .btn-primary {
+      background: linear-gradient(180deg, var(--accent), var(--accent-d));
+      color: #06121A;
+      box-shadow: 0 10px 26px rgba(34, 211, 238, .28);
+    }
+    .btn-primary:disabled {
+      background: var(--surface-2);
+      color: var(--text-3);
+      box-shadow: none;
+      border: 1px solid var(--line);
+    }
+    .btn-ghost {
+      background: var(--surface-2);
+      color: var(--text-2);
+      border: 1px solid var(--line);
+      flex: 0 0 auto;
+      padding: 17px;
+    }
+    .btn-ghost:active { background: var(--surface); }
+
+    /* ---------- Log history ---------- */
+    .log-card { padding-bottom: 14px; }
+    .log-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .log-head h2 { font-size: 14px; font-weight: 700; letter-spacing: .3px; }
+    .log-head .count {
+      font-size: 11px; color: var(--text-3); font-family: var(--mono);
+      background: var(--line-soft); padding: 2px 9px; border-radius: 999px;
+    }
+    .log-list { display: flex; flex-direction: column; gap: 9px; }
+    .log-item {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      background: var(--bg-2);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+    .log-item .li-left { min-width: 0; }
+    .log-item .li-time {
+      font-family: var(--mono); font-size: 15px; font-weight: 700; letter-spacing: .5px;
+    }
+    .log-item .li-meta { font-size: 11.5px; color: var(--text-3); margin-top: 3px; letter-spacing: .2px; }
+    .log-item .li-status {
+      font-size: 11px; font-weight: 700; letter-spacing: .5px;
+      padding: 5px 11px; border-radius: 999px; flex: 0 0 auto;
+    }
+    .log-item .li-status.met { color: var(--ok); background: rgba(52, 211, 153, .12); border: 1px solid rgba(52, 211, 153, .3); }
+    .log-item .li-status.open { color: var(--warn); background: rgba(251, 191, 36, .1); border: 1px solid rgba(251, 191, 36, .28); }
+
+    .empty-log {
+      text-align: center; color: var(--text-3); font-size: 13px;
+      padding: 22px 10px; line-height: 1.5;
+    }
+
+    .footnote {
+      text-align: center; font-size: 11px; color: var(--text-3);
+      letter-spacing: .3px; padding: 4px 10px 2px; line-height: 1.5;
+    }
+    .footnote a { color: var(--accent); text-decoration: none; }
+
+    /* ---------- Modals ---------- */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(4, 8, 16, .72);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      display: grid; place-items: center;
+      padding: 20px;
+      z-index: 50;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity .22s ease, visibility .22s ease;
+    }
+    .overlay.show { opacity: 1; visibility: visible; }
+    .dialog {
+      width: 100%; max-width: 380px;
+      background: linear-gradient(180deg, var(--surface-2), var(--surface));
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      padding: 22px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+      transform: translateY(10px) scale(.97);
+      transition: transform .22s cubic-bezier(.22,.61,.36,1);
+    }
+    .overlay.show .dialog { transform: none; }
+    .dialog h3 { font-size: 18px; font-weight: 700; letter-spacing: .2px; margin-bottom: 6px; }
+    .dialog p  { font-size: 13.5px; color: var(--text-2); line-height: 1.55; }
+
+    .field-label {
+      display: block; font-size: 11px; font-weight: 700;
+      letter-spacing: 1.2px; text-transform: uppercase;
+      color: var(--text-3); margin: 18px 0 9px;
+    }
+    .field-row { display: flex; gap: 10px; }
+    .field { flex: 1; display: flex; flex-direction: column; gap: 7px; }
+    .field > span { font-size: 11px; color: var(--text-3); letter-spacing: .4px; }
+    .input {
+      width: 100%;
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 13px 12px;
+      font-size: 16px;
+      color: var(--text);
+      letter-spacing: .4px;
+      transition: border-color .2s ease, box-shadow .2s ease;
+    }
+    .input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(34, 211, 238, .18);
+    }
+    /* Make native time/date pickers readable on dark theme */
+    .input::-webkit-calendar-picker-indicator { filter: invert(.7); cursor: pointer; }
+
+    .dialog .btn-row { display: flex; gap: 10px; margin-top: 22px; }
+    .dialog .btn-row .btn { padding: 15px 16px; }
+    .btn-danger {
+      background: linear-gradient(180deg, #f87171, #dc2626);
+      color: #1a0608;
+      box-shadow: 0 10px 26px rgba(220, 38, 38, .28);
+    }
+    .btn-cancel {
+      background: var(--bg-2);
+      border: 1px solid var(--line);
+      color: var(--text-2);
+    }
+
+    /* ---------- Toasts ---------- */
+    .toasts {
+      position: fixed;
+      left: 50%; transform: translateX(-50%);
+      bottom: calc(18px + env(safe-area-inset-bottom));
+      display: flex; flex-direction: column; gap: 10px;
+      align-items: center;
+      z-index: 80;
+      width: max(260px, calc(100% - 36px)); max-width: 400px;
+      pointer-events: none;
+    }
+    .toast {
+      background: linear-gradient(180deg, var(--surface-2), var(--surface));
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: 13px;
+      padding: 13px 16px;
+      font-size: 13px;
+      color: var(--text);
+      box-shadow: 0 14px 34px rgba(0, 0, 0, .5);
+      display: flex; align-items: center; gap: 10px;
+      opacity: 0; transform: translateY(14px);
+      animation: toastIn .3s cubic-bezier(.22,.61,.36,1) forwards;
+    }
+    .toast.out { animation: toastOut .3s ease forwards; }
+    .toast.success { border-left-color: var(--ok); }
+    .toast.warn    { border-left-color: var(--warn); }
+    .toast svg { width: 18px; height: 18px; flex: 0 0 auto; }
+    @keyframes toastIn  { to { opacity: 1; transform: none; } }
+    @keyframes toastOut { to { opacity: 0; transform: translateY(8px); } }
+
+    /* Celebration confetti */
+    .confetti-layer {
+      position: fixed; inset: 0; pointer-events: none; z-index: 70; overflow: hidden;
+    }
+    .confetti {
+      position: absolute; top: -12px; width: 8px; height: 13px; border-radius: 2px;
+      animation: fall linear forwards;
+    }
+    @keyframes fall {
+      to { transform: translateY(105vh) rotate(720deg); opacity: .15; }
+    }
+
+    @media (max-width: 360px) {
+      .countdown { letter-spacing: 1px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- Header -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#22D3EE" stroke-width="1.8"/>
+            <path d="M12 12V7" stroke="#22D3EE" stroke-width="1.8" stroke-linecap="round"/>
+            <path d="M12 12l3.4 2" stroke="#98A6BF" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div>
+          <div class="name">Shift Clock</div>
+          <div class="sub">Swipe-In · Target Tracker</div>
+        </div>
+      </div>
+      <div class="clock">
+        <div class="time" id="liveClock">--:--:--</div>
+        <div class="date" id="liveDate">—</div>
+      </div>
+    </header>
+
+    <!-- Status badge -->
+    <div class="status" id="statusBadge" role="status" aria-live="polite">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">No shift yet</span>
+    </div>
+
+    <!-- Countdown hero -->
+    <section class="card hero" id="heroCard">
+      <span class="label" id="countLabel">Time Until Target</span>
+      <div class="countdown" id="countdown" role="timer" aria-live="off">
+        <span id="cdH">00</span><span class="sep">:</span><span id="cdM">00</span><span class="sep">:</span><span id="cdS">00</span>
+      </div>
+      <div class="subline" id="subline">Swipe in to start tracking your <b>3h 30m</b> target.</div>
+      <div class="progress-wrap">
+        <div class="progress-head">
+          <span class="plabel">SHIFT PROGRESS</span>
+          <span class="pct" id="pct">0%</span>
+        </div>
+        <div class="bar"><div class="fill" id="fill"></div></div>
+      </div>
+    </section>
+
+    <!-- Swipe in / out time tiles -->
+    <section class="tiles">
+      <div class="tile in empty" id="tileIn">
+        <div class="t-label">Swipe-In</div>
+        <div class="t-value"><span id="inTime">--:--</span><span class="t-ampm" id="inAmpm">--</span></div>
+      </div>
+      <div class="tile out empty" id="tileOut">
+        <div class="t-label">Target Swipe-Out</div>
+        <div class="t-value"><span id="outTime">--:--</span><span class="t-ampm" id="outAmpm">--</span></div>
+      </div>
+    </section>
+
+    <!-- Actions -->
+    <section class="actions">
+      <button class="btn btn-primary" id="swipeBtn" aria-label="Swipe in now">
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/>
+          <path d="M12 7v5l3 2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span id="swipeBtnLabel">Swipe In Now</span>
+      </button>
+      <button class="btn btn-ghost" id="adjustBtn" title="Adjust swipe-in time" aria-label="Adjust swipe-in time">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M4 20h4V10H4v10zm6 0h4V4h-4v16zm6 0h4v-7h-4v7z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+        </svg>
+      </button>
+      <button class="btn btn-ghost" id="resetBtn" title="Reset / New Shift" aria-label="Reset and start a new shift">
+        <svg viewBox="0 0 24 24" fill="none">
+          <path d="M20 11a8 8 0 1 0-.9 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M20 5v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+    </section>
+
+    <!-- Today's log -->
+    <section class="card log-card">
+      <div class="log-head">
+        <h2>Today’s Shifts</h2>
+        <span class="count" id="logCount">0</span>
+      </div>
+      <div class="log-list" id="logList"></div>
+    </section>
+
+    <p class="footnote">
+      Data is stored on this device only (localStorage).<br/>
+      Add this page to your Home Screen for a full-screen, offline experience.
+    </p>
+  </div>
+
+  <!-- Adjust time modal -->
+  <div class="overlay" id="adjustOverlay" role="dialog" aria-modal="true" aria-labelledby="adjustTitle">
+    <div class="dialog">
+      <h3 id="adjustTitle">Adjust Swipe-In Time</h3>
+      <p id="adjustDesc">Log or correct your swipe-in retroactively. The 3h 30m target is recalculated from the time you set.</p>
+      <label class="field-label" for="adjDate">Date</label>
+      <input class="input" type="date" id="adjDate" />
+      <div class="field-row">
+        <label class="field" style="flex:1;">
+          <span>Time</span>
+          <input class="input" type="time" id="adjTime" step="1" />
+        </label>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-cancel" id="adjCancel">Cancel</button>
+        <button class="btn btn-primary" id="adjSave">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reset confirmation modal -->
+  <div class="overlay" id="resetOverlay" role="dialog" aria-modal="true" aria-labelledby="resetTitle">
+    <div class="dialog">
+      <h3 id="resetTitle">Start a New Shift?</h3>
+      <p>This closes the current shift and clears your saved state. Your <b id="resetLogCount">0</b> logged shift record(s) for today will be kept.</p>
+      <div class="btn-row">
+        <button class="btn btn-cancel" id="resetCancel">Cancel</button>
+        <button class="btn btn-danger" id="resetConfirm">Reset &amp; New</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast host + confetti layer -->
+  <div class="toasts" id="toasts"></div>
+  <div class="confetti-layer" id="confetti"></div>
+
+  <script>
+    "use strict";
+
+    /* =====================================================================
+       CONSTANTS & STATE
+    ===================================================================== */
+    const SHIFT_MS        = (3 * 60 + 30) * 60 * 1000;   // exactly 3h 30m
+    const STORAGE_SHIFT   = "shiftclock.shift";          // active shift {inMs, notified}
+    const STORAGE_LOG     = "shiftclock.log";           // today's history
+    const STORAGE_QUIET   = "shiftclock.notifyQuiet";   // user toggled notifications off
+
+    let activeShift = null;   // { inMs:number, notified:boolean }
+    let shiftLog    = [];     // [{ id, inMs, targetMs, loggedAtMs }]
+    let quietMode   = false;
+
+    let tickHandle = null;
+    let lastStatus = "idle";  // "idle" | "in" | "met"
+
+    /* =====================================================================
+       DOM
+    ===================================================================== */
+    const $ = (id) => document.getElementById(id);
+    const el = {
+      liveClock:  $("liveClock"),
+      liveDate:   $("liveDate"),
+      status:     $("statusBadge"),
+      statusDot:  $("statusDot"),
+      statusText: $("statusText"),
+      hero:       $("heroCard"),
+      countLabel: $("countLabel"),
+      cdH: $("cdH"), cdM: $("cdM"), cdS: $("cdS"),
+      subline:    $("subline"),
+      pct:        $("pct"),
+      fill:       $("fill"),
+      tileIn:     $("tileIn"),  inTime: $("inTime"),  inAmpm:  $("inAmpm"),
+      tileOut:    $("tileOut"), outTime: $("outTime"), outAmpm: $("outAmpm"),
+      swipeBtn:   $("swipeBtn"), swipeBtnLabel: $("swipeBtnLabel"),
+      adjustBtn:  $("adjustBtn"),
+      resetBtn:   $("resetBtn"),
+      logList:    $("logList"), logCount: $("logCount"),
+      toasts:     $("toasts"),
+      confetti:   $("confetti"),
+      // modals
+      adjustOverlay: $("adjustOverlay"),
+      adjDate: $("adjDate"), adjTime: $("adjTime"),
+      adjCancel: $("adjCancel"), adjSave: $("adjSave"),
+      resetOverlay: $("resetOverlay"),
+      resetLogCount: $("resetLogCount"),
+      resetCancel: $("resetCancel"), resetConfirm: $("resetConfirm"),
+    };
+
+    /* =====================================================================
+       PERSISTENCE
+    ===================================================================== */
+    function loadState() {
+      try {
+        const s = JSON.parse(localStorage.getItem(STORAGE_SHIFT) || "null");
+        if (s && typeof s.inMs === "number") activeShift = s;
+      } catch (_) { activeShift = null; }
+
+      const todayKey = new Date().toDateString();
+      try {
+        const raw = JSON.parse(localStorage.getItem(STORAGE_LOG) || "null");
+        if (raw && Array.isArray(raw.items) && raw.date === todayKey) {
+          shiftLog = raw.items;
+        } else {
+          // New day → roll over; keep nothing (history is per-day)
+          shiftLog = [];
+        }
+      } catch (_) { shiftLog = []; }
+
+      quietMode = localStorage.getItem(STORAGE_QUIET) === "1";
+
+      // Reflect the active shift in today's history so the live card shows it.
+      // If a saved shift already crossed its target (e.g. the phone was closed
+      // right at the finish line), finalize it rather than leaving it "Active".
+      if (activeShift) {
+        if (!shiftLog.some((x) => x.inMs === activeShift.inMs)) {
+          shiftLog.push({ id: String(activeShift.inMs), inMs: activeShift.inMs, finalized: false });
+        }
+        if (Date.now() >= activeShift.inMs + SHIFT_MS) {
+          activeShift.notified = true;
+          const it = shiftLog.find((x) => x.inMs === activeShift.inMs);
+          if (it) it.finalized = true;
+          saveShift();
+        }
+        saveLog();
+      }
+    }
+
+    function saveShift() {
+      localStorage.setItem(STORAGE_SHIFT, JSON.stringify(activeShift));
+    }
+
+    function saveLog() {
+      const payload = { date: new Date().toDateString(), items: shiftLog };
+      localStorage.setItem(STORAGE_LOG, JSON.stringify(payload));
+    }
+
+    function clearShiftStorage() {
+      localStorage.removeItem(STORAGE_SHIFT);
+      activeShift = null;
+    }
+
+    /* =====================================================================
+       TIME HELPERS
+    ===================================================================== */
+    const pad = (n) => String(n).padStart(2, "0");
+
+    /** 12-hour h:mm AM/PM split (returns {h, ampm}). */
+    function to12h(d) {
+      let h = d.getHours();
+      const m = d.getMinutes();
+      const ampm = h >= 12 ? "PM" : "AM";
+      let h12 = h % 12;
+      if (h12 === 0) h12 = 12;
+      return { h: pad(h12) + ":" + pad(m), ampm };
+    }
+
+    /** Full 12-hour string e.g. "9:05 AM" with seconds. */
+    function fullTime(d, withSeconds = true) {
+      let h = d.getHours();
+      const ampm = h >= 12 ? "PM" : "AM";
+      let h12 = h % 12; if (h12 === 0) h12 = 12;
+      let out = h12 + ":" + pad(d.getMinutes());
+      if (withSeconds) out += ":" + pad(d.getSeconds());
+      return out + " " + ampm;
+    }
+
+    /** Break a duration (ms) into {h,m,s}. */
+    function splitDur(ms) {
+      const total = Math.max(0, Math.floor(ms / 1000));
+      return { h: Math.floor(total / 3600), m: Math.floor((total % 3600) / 60), s: total % 60 };
+    }
+
+    const WEEKDAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+    const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    function dateLabel(d) {
+      return `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}`;
+    }
+
+    /* =====================================================================
+       NOTIFICATIONS
+    ===================================================================== */
+    function requestNotifyPermission() {
+      if (quietMode) return;
+      if (!("Notification" in window)) {
+        toast("Notifications aren't supported in this browser.", "warn");
+        return;
+      }
+      if (Notification.permission === "granted") return;
+      if (Notification.permission === "denied") return; // don't re-prompt
+      Notification.requestPermission().then((res) => {
+        if (res === "granted") {
+          // Fire a confirmation so the user knows notifications are live.
+          try {
+            new Notification("Shift Clock", {
+              body: "Notifications enabled. You'll be alerted when your target is met.",
+            });
+          } catch (_) {}
+        } else {
+          toast("Notifications blocked — the in-app badge still works.", "warn");
+        }
+      });
+    }
+
+    function fireCompletionNotification() {
+      if (quietMode || !("Notification" in window) || Notification.permission !== "granted") return;
+      const target = new Date(activeShift.inMs + SHIFT_MS);
+      try {
+        const n = new Notification("Full Attendance Met! 🎉", {
+          body: `Target ${fullTime(target, false)} reached — safe to swipe out.`,
+          tag: "shiftclock-complete",
+        });
+        n.onclick = () => { window.focus(); n.close(); };
+      } catch (_) { /* some Android browsers restrict constructor usage */ }
+
+      // Audio chime as a secondary cue (works even with silent notifications on).
+      playChime();
+    }
+
+    /* A short, pleasant chime via Web Audio — no external file needed. */
+    let audioCtx = null;
+    function playChime() {
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const now = audioCtx.currentTime;
+        const notes = [880, 1174.66, 1567.98]; // A5, C#6, E6 → bright major arpeggio
+        notes.forEach((freq, i) => {
+          const o = audioCtx.createOscillator();
+          const g = audioCtx.createGain();
+          o.type = "sine";
+          o.frequency.value = freq;
+          g.gain.setValueAtTime(0.0001, now + i * 0.13);
+          g.gain.exponentialRampToValueAtTime(0.22, now + i * 0.13 + 0.03);
+          g.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.13 + 0.5);
+          o.connect(g).connect(audioCtx.destination);
+          o.start(now + i * 0.13);
+          o.stop(now + i * 0.13 + 0.55);
+        });
+      } catch (_) { /* audio blocked (needs a prior gesture) — non-fatal */ }
+    }
+
+    /* =====================================================================
+       TOASTS
+    ===================================================================== */
+    const TOAST_ICONS = {
+      success: '<svg viewBox="0 0 24 24" fill="none"><path d="M20 6 9 17l-5-5" stroke="#34D399" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      warn:    '<svg viewBox="0 0 24 24" fill="none"><path d="M12 8v5m0 3h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" stroke="#FBBF24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      default: '<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="#22D3EE" stroke-width="1.8"/></svg>',
+    };
+    function toast(msg, type = "default") {
+      const t = document.createElement("div");
+      t.className = `toast ${type}`;
+      t.innerHTML = (TOAST_ICONS[type] || TOAST_ICONS.default) + `<span>${msg}</span>`;
+      el.toasts.appendChild(t);
+      setTimeout(() => {
+        t.classList.add("out");
+        t.addEventListener("animationend", () => t.remove(), { once: true });
+      }, 3400);
+    }
+
+    /* =====================================================================
+       CONFETTI (celebration when 100% is hit)
+    ===================================================================== */
+    const CONFETTI_COLORS = ["#22D3EE", "#34D399", "#4EA1F7", "#FBBF24", "#F48067"];
+    function burstConfetti() {
+      const layer = el.confetti;
+      layer.innerHTML = "";
+      for (let i = 0; i < 46; i++) {
+        const c = document.createElement("div");
+        c.className = "confetti";
+        const size = 5 + Math.random() * 8;
+        c.style.left = Math.random() * 100 + "vw";
+        c.style.width = size + "px";
+        c.style.height = (size * 1.4) + "px";
+        c.style.background = CONFETTI_COLORS[(Math.random() * CONFETTI_COLORS.length) | 0];
+        c.style.animationDuration = (2.2 + Math.random() * 2) + "s";
+        c.style.animationDelay = (Math.random() * 0.5) + "s";
+        c.style.transform = `rotate(${Math.random() * 360}deg)`;
+        layer.appendChild(c);
+      }
+      setTimeout(() => { layer.innerHTML = ""; }, 5200);
+    }
+
+    /* =====================================================================
+       RENDERING
+    ===================================================================== */
+    function renderTimes() {
+      if (!activeShift) {
+        el.inTime.textContent = el.inAmpm.textContent = "--";
+        el.outTime.textContent = el.outAmpm.textContent = "--";
+        el.tileIn.classList.add("empty"); el.tileOut.classList.add("empty");
+        return;
+      }
+      const inD = new Date(activeShift.inMs);
+      const outD = new Date(activeShift.inMs + SHIFT_MS);
+      const a = to12h(inD), b = to12h(outD);
+      el.inTime.textContent = a.h;  el.inAmpm.textContent = a.ampm;
+      el.outTime.textContent = b.h; el.outAmpm.textContent = b.ampm;
+      el.tileIn.classList.remove("empty"); el.tileOut.classList.remove("empty");
+    }
+
+    function renderStatus(state) {
+      el.status.classList.remove("in", "met");
+      el.statusDot.style.animation = "";
+      el.hero.classList.remove("met");
+      el.pct.classList.remove("met");
+
+      if (state === "idle") {
+        el.statusText.textContent = "No shift yet";
+        lastStatus = "idle";
+      } else if (state === "in") {
+        el.status.classList.add("in");
+        el.statusText.textContent = "In Shift";
+        lastStatus = "in";
+      } else { // met
+        el.status.classList.add("met");
+        el.statusText.textContent = "Full Attendance Met! Safe to Swipe Out";
+        el.hero.classList.add("met");
+        el.pct.classList.add("met");
+        lastStatus = "met";
+      }
+    }
+
+    function renderCountdown(remainingMs, totalMs) {
+      const { h, m, s } = splitDur(remainingMs);
+      el.cdH.textContent = pad(h);
+      el.cdM.textContent = pad(m);
+      el.cdS.textContent = pad(s);
+
+      // Progress percentage
+      const pct = Math.min(100, Math.max(0, (1 - remainingMs / totalMs) * 100));
+      const pctRound = Math.round(pct);
+      el.pct.textContent = pctRound + "%";
+      el.fill.style.width = pct + "%";
+    }
+
+    function renderLog() {
+      const now = Date.now();
+      // Ensure the active shift is represented as a live entry.
+      if (activeShift && !shiftLog.some((x) => x.inMs === activeShift.inMs)) {
+        shiftLog.push({ id: String(activeShift.inMs), inMs: activeShift.inMs, finalized: false });
+        saveLog();
+      }
+
+      el.logCount.textContent = shiftLog.length;
+      if (shiftLog.length === 0) {
+        el.logList.innerHTML =
+          '<div class="empty-log">No shifts logged yet today.<br/>Tap <b>Swipe In Now</b> to start.</div>';
+        return;
+      }
+
+      // Most recent first.
+      const items = [...shiftLog].sort((x, y) => y.inMs - x.inMs);
+      el.logList.innerHTML = items.map((it) => {
+        const inD = new Date(it.inMs);
+        const t = to12h(inD);
+        const target = new Date(it.inMs + SHIFT_MS);
+        const isThisActive = !!(activeShift && activeShift.inMs === it.inMs);
+        const met = it.finalized || now >= it.inMs + SHIFT_MS;
+        const cls = met ? "met" : "open";
+        // An in-progress (active) shift that hasn't finished reads "Active".
+        const label = met ? "Met ✓" : (isThisActive ? "Active" : "Open");
+        return `
+          <div class="log-item">
+            <div class="li-left">
+              <div class="li-time">${t.h} <span style="color:var(--text-3)">${t.ampm}</span></div>
+              <div class="li-meta">Target ${fullTime(target, false)} · ${dateLabel(inD)}</div>
+            </div>
+            <span class="li-status ${cls}">${label}</span>
+          </div>`;
+      }).join("");
+    }
+
+    function renderButtons() {
+      if (activeShift) {
+        el.swipeBtn.disabled = true;
+        el.swipeBtnLabel.textContent = "Shift Active";
+        el.swipeBtn.setAttribute("aria-label", "Shift in progress");
+      } else {
+        el.swipeBtn.disabled = false;
+        el.swipeBtnLabel.textContent = "Swipe In Now";
+        el.swipeBtn.removeAttribute("aria-label");
+      }
+    }
+
+    /* =====================================================================
+       LIVE TICK
+    ===================================================================== */
+    function tick() {
+      const now = Date.now();
+
+      // Live header clock (always running)
+      const nd = new Date(now);
+      el.liveClock.textContent =
+        pad(nd.getHours()) + ":" + pad(nd.getMinutes()) + ":" + pad(nd.getSeconds());
+      el.liveDate.textContent = dateLabel(nd);
+
+      if (!activeShift) {
+        renderStatus("idle");
+        el.countLabel.textContent = "Time Until Target";
+        el.cdH.textContent = el.cdM.textContent = el.cdS.textContent = "00";
+        el.subline.innerHTML = "Swipe in to start tracking your <b>3h 30m</b> target.";
+        el.fill.style.width = "0%";
+        el.pct.textContent = "0%";
+        renderTimes();
+        renderButtons();
+        return;
+      }
+
+      const remaining = (activeShift.inMs + SHIFT_MS) - now;
+      renderTimes();
+      renderButtons();
+
+      if (remaining <= 0) {
+        // 100% reached
+        renderStatus("met");
+        el.countLabel.textContent = "Target Reached";
+        el.cdH.textContent = el.cdM.textContent = el.cdS.textContent = "00";
+        el.fill.style.width = "100%";
+        el.pct.textContent = "100%";
+        el.subline.innerHTML = "You've hit your <b>3h 30m</b> target — swipe out whenever you're ready.";
+
+        if (!activeShift.notified) {
+          activeShift.notified = true;
+          saveShift();
+          const it = shiftLog.find((x) => x.inMs === activeShift.inMs);
+          if (it) it.finalized = true;
+          saveLog();
+          fireCompletionNotification();
+          burstConfetti();
+          toast("Full attendance met! Safe to swipe out. 🎉", "success");
+        }
+        renderLog();
+        return;
+      }
+
+      renderStatus("in");
+      el.countLabel.textContent = "Time Until Target";
+      renderCountdown(remaining, SHIFT_MS);
+      el.subline.innerHTML = `Target <b>${fullTime(new Date(activeShift.inMs + SHIFT_MS), false)}</b> — keep going.`;
+      renderLog();
+    }
+
+    function startTicker() {
+      if (tickHandle) return;
+      tick();
+      tickHandle = setInterval(tick, 1000);
+    }
+
+    /* =====================================================================
+       ACTIONS
+    ===================================================================== */
+    function doSwipeIn() {
+      const now = Date.now();
+      activeShift = { inMs: now, notified: false };
+      saveShift();
+      // Record the swipe-in in today's history as a live "Active" entry.
+      shiftLog.push({ id: String(now), inMs: now, finalized: false });
+      saveLog();
+      requestNotifyPermission();
+
+      // Un-mute audio on this user gesture so the chime can play later.
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+      } catch (_) {}
+
+      toast(`Swiped in at ${fullTime(new Date(now), false)}. Good luck!`, "success");
+      renderButtons();
+      tick();
+    }
+
+    function openAdjust() {
+      // Prefill from current shift or now
+      const base = activeShift ? new Date(activeShift.inMs) : new Date();
+      el.adjDate.value = localISODate(base);
+      el.adjTime.value = localISOTime(base);
+      showModal(el.adjustOverlay);
+    }
+
+    function saveAdjust() {
+      const dv = el.adjDate.value;
+      const tv = el.adjTime.value;
+      if (!dv || !tv) { toast("Pick both a date and a time.", "warn"); return; }
+
+      // Parse as local (not UTC) time.
+      const [y, mo, da] = dv.split("-").map(Number);
+      const [hh, mm, ss] = tv.split(":").map((s) => Number(s || 0));
+      const d = new Date(y, mo - 1, da, hh, mm, ss || 0, 0);
+      if (isNaN(d.getTime())) { toast("That time couldn't be read.", "warn"); return; }
+
+      activeShift = { inMs: d.getTime(), notified: false };
+      saveShift();
+      hideModal(el.adjustOverlay);
+      toast(`Swipe-in set to ${fullTime(d, false)}.`, "success");
+      tick();
+    }
+
+    function openReset() {
+      el.resetLogCount.textContent = shiftLog.length;
+      showModal(el.resetOverlay);
+    }
+
+    function doReset() {
+      clearShiftStorage();
+      lastStatus = "idle";
+      saveLog(); // keep today's records (history persists across resets)
+      hideModal(el.resetOverlay);
+      toast("Shift reset. Ready for a new day.", "default");
+      tick();
+    }
+
+    /* =====================================================================
+       MODAL PLUMBING
+    ===================================================================== */
+    function showModal(ov) {
+      ov.classList.add("show");
+      document.body.style.overflow = "hidden";
+    }
+    function hideModal(ov) {
+      ov.classList.remove("show");
+      document.body.style.overflow = "";
+    }
+    function closeAllModals() {
+      hideModal(el.adjustOverlay);
+      hideModal(el.resetOverlay);
+    }
+
+    // Close on backdrop click (but not when clicking inside the dialog)
+    [el.adjustOverlay, el.resetOverlay].forEach((ov) => {
+      ov.addEventListener("click", (e) => {
+        if (e.target === ov) hideModal(ov);
+      });
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeAllModals();
+    });
+
+    /* =====================================================================
+       LOCAL ISO HELPERS (avoid UTC off-by-one for native pickers)
+    ===================================================================== */
+    function localISODate(d) {
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+    function localISOTime(d) {
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    /* =====================================================================
+       PWA RUNTIME: inline manifest + offline service worker
+       (keeps everything a single file; both are injected via blob/data URLs)
+    ===================================================================== */
+    function registerPWA() {
+      // 1) Inline Web App Manifest (128px/512px masks + theme)
+      const iconSvg =
+        "data:image/svg+xml," + encodeURIComponent(
+          "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'>" +
+          "<rect width='512' height='512' rx='112' fill='#0B121F'/>" +
+          "<circle cx='256' cy='256' r='168' fill='none' stroke='#22D3EE' stroke-width='40'/>" +
+          "<line x1='256' y1='256' x2='256' y2='150' stroke='#98A6BF' stroke-width='40' stroke-linecap='round'/>" +
+          "<line x1='256' y1='256' x2='344' y2='256' stroke='#22D3EE' stroke-width='40' stroke-linecap='round'/>" +
+          "</svg>"
+        );
+      const manifest = {
+        name: "Shift Clock",
+        short_name: "Shift Clock",
+        description: "One-tap office swipe-in with a live 3h 30m target countdown.",
+        start_url: ".",
+        scope: ".",
+        display: "standalone",
+        orientation: "portrait",
+        background_color: "#0B121F",
+        theme_color: "#0B121F",
+        icons: [
+          { src: iconSvg, sizes: "192x192", type: "image/svg+xml", purpose: "any" },
+          { src: iconSvg, sizes: "512x512", type: "image/svg+xml", purpose: "any" },
+          { src: iconSvg, sizes: "512x512", type: "image/svg+xml", purpose: "maskable" },
+        ],
+      };
+      const blob = new Blob([JSON.stringify(manifest)], { type: "application/manifest+json" });
+      const link = document.createElement("link");
+      link.rel = "manifest";
+      link.href = URL.createObjectURL(blob);
+      document.head.appendChild(link);
+
+      // 2) Offline service worker (serves the current page when the network is down)
+      if ("serviceWorker" in navigator) {
+        const swCode =
+          "self.addEventListener('install',(e)=>{self.skipWaiting()});" +
+          "self.addEventListener('activate',(e)=>{e.waitUntil(self.clients.claim())});" +
+          "self.addEventListener('fetch',(e)=>{const r=e.request;if(r.method!=='GET')return;" +
+          "e.respondWith(fetch(r).catch(()=>caches.match(r).then((m)=>m||fetch(r))))});" +
+          "self.addEventListener('fetch',(e)=>{caches.open('shiftclock-v1')});";
+        try {
+          const swUrl = URL.createObjectURL(
+            new Blob([swCode], { type: "text/javascript" })
+          );
+          navigator.serviceWorker.register(swUrl).catch(() => {
+            /* Blob SW registration is blocked in some browsers — harmless: the
+               app still works online and the PWA meta tags handle Home Screen. */
+          });
+        } catch (_) {}
+      }
+    }
+
+    /* =====================================================================
+       BOOT
+    ===================================================================== */
+    function init() {
+      loadState();
+
+      // Wire actions
+      el.swipeBtn.addEventListener("click", doSwipeIn);
+      el.adjustBtn.addEventListener("click", openAdjust);
+      el.resetBtn.addEventListener("click", openReset);
+      el.adjSave.addEventListener("click", saveAdjust);
+      el.adjCancel.addEventListener("click", () => hideModal(el.adjustOverlay));
+      el.resetConfirm.addEventListener("click", doReset);
+      el.resetCancel.addEventListener("click", () => hideModal(el.resetOverlay));
+
+      // If a saved shift already exists and its target has passed, the first
+      // tick will fire the completion notification exactly once.
+      startTicker();
+      renderLog();
+      renderTimes();
+      renderButtons();
+
+      registerPWA();
+
+      // Re-sync state if the tab returns from background (clock may have drifted).
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) tick();
+      });
+      window.addEventListener("storage", () => {
+        loadState();
+        tick();
+      });
+    }
+
+    // Defer until DOM is ready (script is at the end of <body>, but be safe).
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
+  </script>
+</body>
+</html>
